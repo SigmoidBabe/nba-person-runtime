@@ -1,0 +1,36 @@
+{
+  "session_id": "people-example-1",
+  "status": true,
+  "source": {
+    "camera": {
+      "camera_id": "camera-1",
+      "stream_address": "rtsp://localhost:8554/example"
+    }
+  },
+  "inference": {
+    "inference_type": "tracking",
+    "objects": ["person"],
+    "config": {
+      "fps": 5,
+      "zone_min_overlap": 0.3,
+      "missing_track_ttl_seconds": 10,
+      "direction_threshold_pixels": 3,
+      "line_crossing_tolerance_pixels": 1,
+      "source_gap_seconds": 10
+    }
+  },
+  "zones": [
+    {
+      "zone_id": "entrance",
+      "zone_name": "Entrance",
+      "type": "polygon",
+      "points": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]
+    },
+    {
+      "zone_id": "door-line",
+      "type": "line",
+      "points": [[0.5, 0.1], [0.5, 0.9]]
+    }
+  ],
+  "output": {"mode": "event", "interval": 0}
+}

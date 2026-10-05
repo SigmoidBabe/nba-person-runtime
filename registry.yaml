@@ -1,0 +1,10 @@
+# For an already installed example package; enables only this runtime.
+- runtime_id: cv.people
+  package:
+    entry_point: cv.people
+  capabilities:
+    - id: person.detection
+      api: true
+      output_modes: [periodic, event]
+    - id: person.tracking
+      output_modes: [periodic, event]

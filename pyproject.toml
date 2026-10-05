@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cv-people-runtime"
+version = "0.1.0"
+description = "person detection and tracking runtime for cv-demo"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "aiohttp>=3.9", "numpy>=1.24", "opencv-python>=4.8",
+  "scipy>=1.10", "shapely>=2", "PyYAML>=6",
+  "person-inference[tensorrt] @ git+https://github.com/SigmoidBabe/nba-detection.git",
+  "osnet-reid-trt @ git+https://github.com/SigmoidBabe/nba-person-reid.git"
+]
+
+[project.entry-points."cv_demo.runtimes"]
+"cv.people" = "cv_people.runtime:PeopleRuntime"
+
+[project.entry-points."cv_demo.http_apis"]
+"person.detection" = "cv_people.http:PeopleDetectionAPI"
+
+[tool.setuptools.packages.find]
+where = ["src"]
