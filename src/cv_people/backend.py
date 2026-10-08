@@ -1,6 +1,9 @@
 """Shared detector/ReID and session-local BoT-SORT, adapted from the workers."""
 import logging
+from contextlib import contextmanager
 from dataclasses import fields
+from pathlib import Path
+from threading import RLock
 import numpy as np
 import yaml
 from person_inference import Detector
@@ -15,19 +18,48 @@ class PeopleBackend:
     def __init__(self, config, *, enable_reid=True):
         self.config = config
         self.logger = logging.getLogger(__name__)
-        self.person_detector = Detector(config["model"]["person"])
+        self._model_lock = RLock()
+        self._cuda_context = None
         reid_path = config["model"].get("reid")
+        if Path(config["model"]["person"]).suffix.lower() == ".trt" or (enable_reid and reid_path):
+            # Both TensorRT dependencies use autoinit. Its import may have run
+            # on another thread; activate that same context before creating
+            # engines/streams, and again for every call using their resources.
+            import pycuda.autoinit
+            self._cuda_context = pycuda.autoinit.context
         self.person_reid = None
-        if enable_reid and reid_path:
-            from osnet_reid_trt import ReIDTRT
-            self.person_reid = ReIDTRT(reid_path)
+        with self._model_access():
+            self.person_detector = Detector(config["model"]["person"])
+            if enable_reid and reid_path:
+                from osnet_reid_trt import ReIDTRT
+                self.person_reid = ReIDTRT(reid_path)
         self.trackers_by_service_key = {}
         self.tracker_data_by_service_key = {}
 
+    @contextmanager
+    def _model_access(self):
+        with self._model_lock:
+            if self._cuda_context is None:
+                yield
+            else:
+                self._cuda_context.push()
+                try:
+                    yield
+                finally:
+                    self._cuda_context.pop()
+
+    def close(self):
+        with self._model_access():
+            self.trackers_by_service_key.clear()
+            self.tracker_data_by_service_key.clear()
+            self.person_reid = None
+            self.person_detector = None
+
     def detect(self, image, threshold):
-        result = self.person_detector.detect_n_seg(
-            image, labels=["person"], score_threshold=threshold,
-        )
+        with self._model_access():
+            result = self.person_detector.detect_n_seg(
+                image, labels=["person"], score_threshold=threshold,
+            )
         return self.convert_detection_result(result)
 
     def convert_detections_to_people(self, detections):
@@ -137,6 +169,10 @@ class PeopleBackend:
         if not crops:
             return []
 
+        with self._model_access():
+            return self._extract_reid_batch(crops)
+
+    def _extract_reid_batch(self, crops):
         try:
             return self.person_reid.extract_features(crops)
         except Exception as exc:
@@ -258,4 +294,3 @@ class PeopleBackend:
         if feature.size == 0:
             return None
         return feature
-

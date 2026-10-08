@@ -175,5 +175,7 @@ class PeopleRuntime:
     def close(self):
         for sid in list(self.sessions):
             self.close_session(sid)
+        if self.backend is not None:
+            self.backend.close()
         self.backend = None
         self.closed = True

@@ -133,8 +133,10 @@ an annotated image. The core adds IDs/timestamps and handles S3/backend delivery
 ```
 
 The HTTP confidence threshold is 0.4. Its model instance is independent of
-runtime models because HTTP APIs run in a separate process. Inference and cleanup run on one dedicated worker thread under a lock, preserving
-TensorRT CUDA context ownership. The HTTP API only loads the detector.
+runtime models because HTTP APIs run in a separate process. Inference and cleanup run on one dedicated worker thread under a lock.
+The backend activates the dependencies' PyCUDA context during model construction,
+inference, and cleanup, including when initialization and inference run on different
+threads. Detector and ReID calls on a backend are serialized. The HTTP API only loads the detector.
 This is an image-upload example: JSON/base64 and on-demand camera capture from
 the old HTTP endpoint are not implemented. Runtime camera ingestion remains
 the core application's responsibility.

@@ -66,6 +66,8 @@ class PeopleDetectionAPI:
 
     def _close(self):
         with self.lock:
+            if self.backend is not None:
+                self.backend.close()
             self.backend = None
 
     async def cleanup(self, app):
