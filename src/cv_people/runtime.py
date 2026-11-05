@@ -1,4 +1,4 @@
-"""External runtime contract: shared models, isolated session analytics."""
+"""CUDA inference and isolated session analytics, returning gRPC event data."""
 import copy
 import math
 import time
@@ -108,15 +108,12 @@ class PeopleRuntime:
         thresholds = [state["spec"]["config"]["confidence_threshold"] for state in states
                       if state["spec"]["capability"] == "person.detection"]
         thresholds.extend(tracker.config.track_low_thresh for tracker in trackers)
-        image = frame["image"]
+        image = backend.validate_frame(frame["image"])
         # Detect once for all submitted sessions, retaining low-confidence boxes for BoT-SORT.
-        detections = backend.detect(image, min(thresholds))
-        people = backend.convert_detections_to_people(detections)
-        features = [None] * len(detections)
         reid_trackers = [tracker for tracker in trackers if tracker.config.with_reid]
-        if reid_trackers:
-            feature_tracker = min(reid_trackers, key=lambda tracker: tracker.config.track_high_thresh)
-            features = backend.extract_reid_features_by_frame([image], [detections], [feature_tracker])[0]
+        reid_threshold = min((tracker.config.track_high_thresh for tracker in reid_trackers), default=None)
+        detections, features = backend.infer(image, min(thresholds), reid_threshold)
+        people = backend.convert_detections_to_people(detections)
         trackers_by_id = {state["spec"]["session_id"]: tracker for state, tracker in zip(tracking, trackers)}
         results = {}
         now = time.monotonic()
@@ -125,7 +122,6 @@ class PeopleRuntime:
             sid = spec["session_id"]
             analytics.ensure_zone_polygons(image)
             event_data = []
-            tracks = None
             if spec["capability"] == "person.detection":
                 filtered = analytics.filter_people_by_confidence(people)
                 counts, filtered = analytics.count_people_in_zones(filtered)
@@ -142,7 +138,7 @@ class PeopleRuntime:
                 boxes, embeddings = backend.filter_tracker_roi(tracker, detections.copy(), list(features))
                 tracked = tracker.update_from_detections(boxes, image, detection_features=embeddings)
                 tracks = backend.convert_tracks(self._item(spec), tracker, tracked)
-                annotations, tracked_people, counts, zones, crossings = analytics.analyze_trackers(
+                _, tracked_people, counts, zones, crossings = analytics.analyze_trackers(
                     tracks, frame["timestamp_ns"] / 1_000_000_000
                 )
                 snapshot = {"people_count": len(tracked_people), "people": tracked_people,
@@ -154,16 +150,7 @@ class PeopleRuntime:
             ):
                 event_data.append(snapshot)
                 state["last_output"] = now
-            events = []
-            if event_data:
-                annotated = image.copy()
-                if tracks is None:
-                    analytics.draw_people(annotated, filtered)
-                    analytics.draw_zone_counts(annotated, counts)
-                else:
-                    analytics.draw_trackers(annotated, tracks, annotations)
-                analytics.draw_zones(annotated)
-                events = [{"data": data, "image": annotated} for data in event_data]
+            events = [{"data": data} for data in event_data]
             results[sid] = {"snapshot": snapshot, "events": events}
         return results
 

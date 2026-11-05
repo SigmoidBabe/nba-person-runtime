@@ -1,155 +1,129 @@
-# cv.people external runtime example
+# cv.people CUDA runtime
 
-This directory is an independently installable Python package implementing the
-current `cv_demo.runtimes` and `cv_demo.http_apis` contracts. It adapts the existing
-people detection and tracking workers without importing the application's
-`internal`, `app`, or `pkg` namespaces. Copy this directory into a separate
-repository to develop it as an external package. Model weights are not included.
+Standalone `cv_demo.runtimes` package for `person.detection` and
+`person.tracking`. Detection, TensorRT execution, and OSNet ReID are implemented
+inside this package. There is no dependency on `person-inference`,
+`osnet-reid-trt`, PyCUDA, or host application modules.
 
-## Setup
+## Installation
 
-From the cv-demo repository root, in the application's Python environment:
+Use CUDA 12.x, CuPy 13.x and TensorRT 8.6–10.x compatible with your engines:
 
 ```sh
-python3 -m pip install -e internal/ai_runtime/runtime_package_example/cv_people
-export CV_DEMO_RUNTIME_REGISTRY=internal/ai_runtime/runtime_package_example/cv_people/registry.yaml
+python3 -m pip install -e ./packages/inference-person
+CV_DEMO_RUNTIME_REGISTRY=packages/inference-person/registry.yaml python3 -m app.cv_demo.main
 ```
 
-Start cv-demo normally. This registry enables only the example; the default
-`new_registry.yaml` requires the other listed packages too. Install exactly one
-distribution exporting `cv.people`. The local registry is for an already installed
-package, not the Git deployment installer. For deployment, put the extracted
-package's repository URL in the `cv.people` entry of `new_registry.yaml`.
+Set engine paths in this package's `registry.yaml` before starting the host.
+Only one installed distribution may export `cv.people`; replace the earlier
+example runtime when installing this one. When combining registries, enable
+only one owner for each person capability. Models are loaded on first session
+creation and shared across sessions. Engines and weights are supplied separately.
 
-Configure existing weights in the application's configuration:
+The registry's `config` contains package settings (not the host's app config):
 
-```json
-{
-  "model": {
-    "person": "/absolute/path/to/person.pt",
-    "reid": "/absolute/path/to/osnet.engine"
-  }
-}
+```yaml
+config:
+  device: 0
+  model:
+    person: /opt/models/person_sprint_11.engine
+    reid: /opt/models/osnet_reid.engine
+  detector_size: [640, 640]
+  detector_layout: BCN
+  detector_resize: stretch
+  iou_threshold: 0.4
+  max_people: 300
+  reid_batch_size: 32
 ```
 
-Detection uses the installed `person-inference` package (`person_inference.Detector`).
-Install its backend extra for your model: `ultralytics` for `.pt`, `onnx` for
-`.onnx`, or `tensorrt` for `.trt`. Put a same-stem `.txt` label file beside the
-model, with one class per line including `person`.
+Omit `model.reid` for IoU/motion-only tracking. `model.tracking_config` may name a
+BoT-SORT YAML file; a session's `inference.config.tracking_config` overrides it.
+The host ingestion GPU must match `device`.
 
-Optional ReID uses the installed `osnet-reid-trt` package
-(`osnet_reid_trt.ReIDTRT`) and a serialized OSNet TensorRT engine, including its
-backbone and BN neck. Install that package from your local clone or repository
-before installing this runtime with its `reid` extra; it is not published on
-PyPI. Without `model.reid`, tracking uses motion/IoU association. PyTorch
-checkpoints are no longer accepted for ReID.
+## GPU data path
 
-See [detection package reference](docs/detection_external.md) and
-[OSNet package reference](docs/osnet_external.md) for installation and engine
-requirements. These packages must be installed in the application's environment;
-the runtime does not bundle their implementations. Models load on first session
-creation and are shared by that runtime instance. For TensorRT, create sessions,
-process frames, and close the runtime on the same CUDA context-owning thread,
-with serialized calls.
+Runtime input must expose `__cuda_array_interface__` as a non-empty HWC uint8
+BGR frame on the configured GPU. CPU frames are rejected. Strided CUDA IPC
+frames are wrapped directly, without uploading or copying their pixel storage.
 
-## Requests and lifecycle
+- A fused CUDA kernel resizes, converts BGR to RGB, normalizes and writes NCHW.
+  `detector_resize: stretch` preserves the old TensorRT detector's resizing;
+  select `letterbox` for an engine expecting aspect-preserving padding.
+- TensorRT input and raw outputs use CuPy device allocations. YOLO decoding,
+  best-class filtering, confidence filtering, sorting, box restoration/clipping,
+  and greedy NMS run on CUDA. NMS considers the top 3000 candidates and returns
+  at most `max_people` detections.
+- OSNet crops are generated directly from the original CUDA frame. A fused
+  kernel performs bilinear sampling, RGB conversion, ImageNet normalization and
+  NCHW layout at 256×128. TensorRT ReID inference and L2 normalization run on CUDA.
+  Crops are bounded by `reid_batch_size`; engine batch limits are also enforced.
+- Only final boxes and normalized embeddings are downloaded for the existing
+  BoT-SORT association and zone/session bookkeeping. These metadata operations
+  and JSON serialization remain on CPU. Image pixels, crops, raw predictions,
+  and image preprocessing/postprocessing never run on CPU.
 
-Send `session.example.json` to `POST /api/v1/runtime` after replacing the source
-with an actual configured camera. Change `inference_type` to `detection` for
-counting. Explicit selection is also supported:
+CuPy and TensorRT share the ingestion CUDA primary context. Model calls are
+serialized and select the configured device on every thread. CUDA work is
+synchronized even on failures before borrowed frame storage can be recycled.
+
+Detector engines must expose one linear FP16/FP32 NCHW input and one raw YOLOv8
+output `[B,4+C,N]` (`BCN`) or `[B,N,4+C]` (`BNC`). Supply a same-stem `.txt` file
+with one unique non-empty label per line, including `person`. This runtime uses
+detection outputs; segmentation and end-to-end NMS engines are unsupported.
+OSNet engines must include the backbone and BN neck, accept `[B,3,256,128]`, and
+return `[B,embedding_dim]`. Profile zero controls dynamic batches; fixed batches
+and profile minima are padded on GPU and their extra predictions discarded.
+
+## gRPC sessions and events
+
+Send `session.example.json` as a protobuf Struct to
+`cv_demo.runtime.v1.RuntimeControl/StartRuntime`. Use
+`inference.inference_primitive_usecase: "person tracking"` or `"person detection"`.
+Explicit selection is also supported:
 
 ```json
 {"runtime": {"id": "cv.people", "capability": "person.tracking"}}
 ```
 
-If both selectors are supplied they must agree. The core resolves the selector
-and calls `PeopleRuntime.create_session()` with a plain dictionary:
+The host supplies ingestion frames and schedules eligible session IDs. One
+CUDA detector pass serves all sessions on the frame, with shared ReID features
+for tracking sessions. Each session owns independent tracker and analytics state.
 
-```python
-{
-    "session_id": "people-example-1",
-    "camera_id": "camera-1",
-    "capability": "person.tracking",
-    "config": {"fps": 5},
-    "zones": [],
-    "output": {"mode": "periodic", "interval": 5},
-}
-```
+Each frame returns `{session_id: {"snapshot": ..., "events": [{"data": ...}]}}`.
+The host sends snapshots to the separate metadata subscription and wraps each
+event as `type: "inference_event"`, adding session/camera IDs and frame timestamps.
+Events arrive on that session's open `StartRuntime` gRPC stream as
+`event_payload`. The package performs no backend POST, S3 upload, JPEG encoding,
+or CPU image annotation. Events contain data only, with no image attachment.
+The legacy HTTP upload API is no longer exported; starting a gRPC session does
+not require a `person.detection` package API entry point or `api: true` flag.
 
-The core calls `process_frame(frame, session_ids)` with a read-only BGR image.
-One detector pass serves all submitted sessions; compatible ReID features are
-also shared. Each tracking session owns its tracker and analytics. Detection
-sessions filter the shared result with their own confidence threshold.
-Each submitted ID receives `{"snapshot": ..., "events": [...]}`; annotations
-use an image copy. The core owns ingestion, FPS scheduling, metadata, uploads,
-and backend delivery. This package owns inference, event conditions and timers.
+Detection snapshots contain `people_count`, `people`, `zone_counts`, and `zones`.
+Event mode emits initial counts and stabilized count changes. Tracking retains
+BoT-SORT IDs, direction, speed, occupancy and dwell-time analytics, with
+`person_zone.enter`, `person_zone.exit`, and `person_line.cross` events.
+Periodic mode emits immediately, then at `output.interval` seconds (zero means
+every processed frame).
 
-`close_session()` discards session/tracker state. `close()` removes all sessions
-and releases model references. Calls are synchronous and serialized by the host.
-Non-increasing timestamps/sequences, resolution changes, and source gaps reset
-tracking and analytics. Missing tracks are pruned without synthesized exit events,
-matching the original behavior.
-
-## Configuration and output
-
-Settings go directly in `inference.config`, without the old `params` wrapper:
+Session options go directly under `inference.config`:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `fps` | `5` | Host frame rate and tracker timing |
-| `confidence_threshold` | `0.4` | Detection session confidence filter |
-| `count_stabilization_time` | `0` | Seconds a changed count must persist |
-| `zone_min_overlap` | `0.3` | Fraction of a box inside a polygon |
-| `tracking_config` | unset | YAML path containing `BoTSORTConfig` fields |
-| `missing_track_ttl_seconds` | `10` | Analytics retention for missing tracks |
-| `direction_threshold_pixels` | `3` | Direction classification threshold |
-| `line_crossing_tolerance_pixels` | `1` | Crossing jitter band |
-| `source_gap_seconds` | `10` | Source interruption reset threshold |
+| `fps` | 5 | Host frame scheduling and tracker timing |
+| `confidence_threshold` | 0.4 | Detection session confidence filter |
+| `count_stabilization_time` | 0 | Seconds a changed count must persist |
+| `zone_min_overlap` | 0.3 | Fraction of a box inside a polygon |
+| `tracking_config` | unset | Session override for tracker YAML |
+| `missing_track_ttl_seconds` | 10 | Retention for missing tracks |
+| `direction_threshold_pixels` | 3 | Direction classification threshold |
+| `line_crossing_tolerance_pixels` | 1 | Crossing jitter band |
+| `source_gap_seconds` | 10 | Reset after source interruption |
 
-Tracking confidence thresholds come from BoT-SORT settings. Tracker `frame_rate`
-and `person_class_id` are derived from session FPS and model class names. ReID is
-disabled if weights are absent. Relative model/YAML paths resolve in the app process.
+Zones accept `type`/`points` or `zone_type`/`polygon`; normalized coordinates
+scale to frame dimensions. Detection uses xyxy boxes; tracking uses xywh boxes.
+Non-increasing timestamps/sequences, resolution changes and source gaps reset
+session analytics and tracking. `StopRuntime` closes the session; disconnecting
+the event stream only unsubscribes, following the host's runtime contract.
 
-Zones accept `type`/`points` or legacy `zone_type`/`polygon`. Coordinates between
-zero and one scale to image dimensions; others are pixels. Polygon membership
-uses box overlap; line crossings use box centers. Snapshot boxes are pixels:
-`box` is xyxy for detection, `bbox` is xywh for tracking.
-
-Detection snapshots contain people and total/per-zone counts. Event mode emits
-the initial count and stabilized total/zone count changes, including when no
-zones exist. Tracking snapshots include direction, speed, occupancy and dwell
-time; event mode emits `person_zone.enter`, `person_zone.exit`, and
-`person_line.cross`. Periodic mode emits immediately on the first frame and then
-at `output.interval` seconds (zero means every processed frame). Events include
-an annotated image. The core adds IDs/timestamps and handles S3/backend delivery.
-
-## HTTP API
-
-`api: true` loads `cv_people.http:PeopleDetectionAPI` and registers
-`POST /api/v1/detect_people`. Send a raw image body or multipart `image`/`file`:
-
-```json
-{"status": 200, "message": "succeeded", "data": {"people": [], "people_count": 0}}
-```
-
-The HTTP confidence threshold is 0.4. Its model instance is independent of
-runtime models because HTTP APIs run in a separate process. Inference and cleanup run on one dedicated worker thread under a lock.
-The backend activates the dependencies' PyCUDA context during model construction,
-inference, and cleanup, including when initialization and inference run on different
-threads. Detector and ReID calls on a backend are serialized. The HTTP API only loads the detector.
-This is an image-upload example: JSON/base64 and on-demand camera capture from
-the old HTTP endpoint are not implemented. Runtime camera ingestion remains
-the core application's responsibility.
-
-## Source mapping
-
-- `runtime.py`: lifecycle, shared inference, and output scheduling.
-- `backend.py`: detection conversion and BoT-SORT/ReID helpers from the workers.
-- `analytics.py`: count stabilization, dwell, direction, and crossing logic from
-  `person_detection_session.py` and `people_tracking_session.py`.
-- `zones.py`: geometry and drawing adapted from `generic_runtime.py`.
-- `botsort_reid/`: local tracking helpers using the installed detection and ReID packages.
-- `http.py`: standalone image-upload adaptation of `PeopleDetectionAPI`.
-
-No tests, model inference, package build, or dependency installation were run
-when creating this example.
+Implementation details: [detector](docs/detection_external.md),
+[OSNet](docs/osnet_external.md).

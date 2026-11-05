@@ -1,5 +1,5 @@
 # encoding: utf-8
-"""YOLOv8 + OSNet BoT-SORT tracker with Shapely IoU."""
+"""BoT-SORT on compact result metadata; CUDA detector/ReID live in this package."""
 
 from collections import deque
 from dataclasses import dataclass, fields
@@ -212,12 +212,12 @@ class BoTSORTTrack(BaseTrack):
 
 
 class YOLOv8BoTSORT:
-    """BoT-SORT tracker using installed detection and OSNet TensorRT packages."""
+    """BoT-SORT metadata association with package-owned CUDA inference."""
 
     def __init__(
         self,
         reid_model_path: Optional[str],
-        detector_model: str = "yolov8s.pt",
+        detector_model: str = "person.engine",
         config: Optional[BoTSORTConfig] = None,
         device: Optional[str] = None,
         detector=None,
@@ -252,18 +252,24 @@ class YOLOv8BoTSORT:
         self.kalman_filter = KalmanFilter()
 
     def _load_detector(self, detector_model):
-        from person_inference import Detector
-        return Detector(detector_model)
+        import cupy as cp
+        from ..detection import PersonDetector
+        device = int(self.device or 0)
+        with cp.cuda.Device(device):
+            return PersonDetector(detector_model, device)
 
     def detect(self, frame) -> np.ndarray:
-        result = self.detector.detect_n_seg(
-            frame, labels=["person"], score_threshold=self.config.track_low_thresh,
-        )
-        if result.boxes is None or len(result.boxes) == 0:
-            return np.empty((0, 6), dtype=float)
-        detections = np.asarray(result.boxes, dtype=float)[:, :6]
-        self.config.person_class_id = self.detector.get_label_idx(["person"])[0]
-        return self._filter_roi(detections)
+        import cupy as cp
+        from ..gpu import cuda_frame
+        device = self.detector.device
+        with cp.cuda.Device(device):
+            try:
+                image = cuda_frame(frame, device)
+                boxes = self.detector.detect(image, self.config.track_low_thresh)
+                self.config.person_class_id = self.detector.person_class_id
+                return cp.asnumpy(boxes)
+            finally:
+                cp.cuda.get_current_stream().synchronize()
 
     def update(self, frame) -> List[TrackResult]:
         detections = self.detect(frame)
@@ -567,37 +573,23 @@ class YOLOv8BoTSORT:
 
 class PersonReIDBatchEncoder:
     def __init__(self, model_path, device=None):
-        from osnet_reid_trt import ReIDTRT
-        self.model = ReIDTRT(model_path)
+        from ..reid import PersonReID
+        self.device = int(device or 0)
+        import cupy as cp
+        with cp.cuda.Device(self.device):
+            self.model = PersonReID(model_path, self.device)
 
     def inference(self, frame, bboxes):
-        features = [None] * len(bboxes)
-        crops = []
-        crop_indexes = []
-        frame_h, frame_w = frame.shape[:2]
-
-        for index, bbox in enumerate(bboxes):
-            x1, y1, x2, y2 = map(int, bbox)
-            x1 = max(0, min(frame_w, x1))
-            x2 = max(0, min(frame_w, x2))
-            y1 = max(0, min(frame_h, y1))
-            y2 = max(0, min(frame_h, y2))
-
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            crop = frame[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
-
-            crops.append(crop)
-            crop_indexes.append(index)
-
-        crop_features = self.model.extract_features(crops)
-        for index, feature in zip(crop_indexes, crop_features):
-            features[index] = feature
-
-        return features
+        import cupy as cp
+        from ..gpu import cuda_frame
+        with cp.cuda.Device(self.device):
+            try:
+                image = cuda_frame(frame, self.device)
+                boxes = cp.asarray(bboxes, dtype=cp.float32).reshape(-1, 4)
+                features = cp.asnumpy(self.model.extract(image, boxes))
+                return [vector if np.any(vector) else None for vector in features]
+            finally:
+                cp.cuda.get_current_stream().synchronize()
 
 
 class PersonTracker:
@@ -612,7 +604,7 @@ class PersonTracker:
 
         self.tracker = YOLOv8BoTSORT(
             reid_model_path=model_config.get("reid"),
-            detector_model=model_config.get("person", "yolov8s.pt"),
+            detector_model=model_config.get("person", "person.engine"),
             config=tracker_config,
         )
 
@@ -652,27 +644,6 @@ class PersonTracker:
                 del self.trackers[track_id]
 
         return self.trackers
-
-    def draw_trackers(self, frame):
-        try:
-            import cv2
-        except ImportError:
-            return frame
-
-        for track_id, data in self.trackers.items():
-            x, y, w, h = map(int, data["bbox"])
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(
-                frame,
-                f"ID {track_id}",
-                (x, y - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2,
-            )
-
-        return frame
 
     def _build_tracker_config(self, tracking_config_path):
         tracker_settings = {}

@@ -1,7 +1,5 @@
 """Zone geometry adapted from BaseRuntimeSession; no transport or publishing."""
 import json
-import cv2
-import numpy as np
 from shapely.geometry import Polygon
 
 class ZoneAnalytics:
@@ -200,37 +198,4 @@ class ZoneAnalytics:
             enriched_people.append(person_data)
 
         return zone_counts, enriched_people
-
-    def draw_zones(self, frame):
-        frame_height, frame_width = frame.shape[:2]
-        for zone_name, zone_data in self.zones.items():
-            polygon = zone_data.get("polygon")
-            if not polygon:
-                continue
-
-            points = self.normalize_polygon_points(
-                polygon,
-                frame_width,
-                frame_height,
-            )
-            if len(points) < 2:
-                continue
-
-            points = np.array(points, dtype=np.int32)
-            cv2.polylines(
-                frame,
-                [points],
-                len(points) >= 3,
-                (0, 0, 255),
-                2,
-            )
-            cv2.putText(
-                frame,
-                str(zone_name),
-                tuple(points[0]),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 0, 255),
-                2,
-            )
 

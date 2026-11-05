@@ -1,1 +1,1 @@
-"""Standalone example runtime for person detection and tracking."""
+"""Standalone CUDA person detection/ReID runtime with gRPC session events."""

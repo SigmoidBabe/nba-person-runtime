@@ -1,7 +1,6 @@
 """Per-session analytics adapted from the existing detection/tracking sessions."""
 import time
 from uuid import uuid4
-import cv2
 from .zones import ZoneAnalytics
 
 class DetectionAnalytics(ZoneAnalytics):
@@ -84,43 +83,6 @@ class DetectionAnalytics(ZoneAnalytics):
         self.candidate_count_since = None
         return True
 
-    def draw_people(self, frame, people):
-        for idx, person in enumerate(people, start=1):
-            box = person.get("box")
-            if not box:
-                continue
-
-            x1, y1, x2, y2 = map(int, box[:4])
-            confidence = person.get("confidence")
-            label = f"person {idx}"
-            if confidence is not None:
-                label = f"{label} {confidence:.2f}"
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(
-                frame,
-                label,
-                (x1, max(y1 - 10, 16)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2,
-            )
-
-    def draw_zone_counts(self, frame, zone_counts):
-        y = 30
-        for zone_name, count in zone_counts.items():
-            cv2.putText(
-                frame,
-                f"{zone_name}: {count}",
-                (20, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 255),
-                2,
-            )
-            y += 30
-
 
 class TrackingAnalytics(ZoneAnalytics):
     def __init__(self, spec):
@@ -140,45 +102,6 @@ class TrackingAnalytics(ZoneAnalytics):
             return float(params.get(key, default))
         except (TypeError, ValueError):
             return default
-
-    def draw_trackers(self, frame, trackers, analytics=None):
-        analytics = analytics or {}
-        for person_id, data in trackers.items():
-            bbox = data.get("bbox")
-            if not bbox:
-                continue
-
-            x, y, width, height = map(int, bbox)
-            x2 = x + width
-            y2 = y + height
-            cv2.rectangle(frame, (x, y), (x2, y2), (0, 255, 0), 2)
-            person_analytics = analytics.get(str(person_id), {})
-            formatted_person_id = person_analytics.get(
-                "person_id",
-                f"{self.track_id_prefix}{person_id}",
-            )
-            label = f"ID {formatted_person_id}"
-            direction = person_analytics.get("direction")
-            if direction:
-                label = f"{label} {direction}"
-
-            zones = person_analytics.get("zones") or []
-            if zones:
-                max_duration = max(
-                    zone.get("duration_seconds", 0.0)
-                    for zone in zones
-                )
-                label = f"{label} {int(max_duration)}s"
-
-            cv2.putText(
-                frame,
-                label,
-                (x, max(y - 10, 16)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2,
-            )
 
     def tracker_center(self, bbox):
         x, y, width, height = [float(value) for value in bbox[:4]]

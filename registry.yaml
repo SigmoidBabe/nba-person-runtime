@@ -1,10 +1,21 @@
-# For an already installed example package; enables only this runtime.
+# Install with: python3 -m pip install -e ./packages/inference-person
+# Set engine paths below before starting the host; ingestion must use this GPU.
 - runtime_id: cv.people
   package:
     entry_point: cv.people
+  config:
+    device: 0
+    model:
+      person: /opt/models/person_sprint_11.engine
+      reid: /opt/models/osnet_reid.engine
+    detector_size: [640, 640]
+    detector_layout: BCN
+    detector_resize: stretch
+    iou_threshold: 0.4
+    max_people: 300
+    reid_batch_size: 32
   capabilities:
     - id: person.detection
-      api: true
       output_modes: [periodic, event]
     - id: person.tracking
       output_modes: [periodic, event]

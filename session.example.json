@@ -1,6 +1,5 @@
 {
   "session_id": "people-example-1",
-  "status": true,
   "source": {
     "camera": {
       "camera_id": "camera-1",
@@ -8,8 +7,7 @@
     }
   },
   "inference": {
-    "inference_type": "tracking",
-    "objects": ["person"],
+    "inference_primitive_usecase": "person tracking",
     "config": {
       "fps": 5,
       "zone_min_overlap": 0.3,
