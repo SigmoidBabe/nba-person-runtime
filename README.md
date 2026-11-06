@@ -20,25 +20,29 @@ example runtime when installing this one. When combining registries, enable
 only one owner for each person capability. Models are loaded on first session
 creation and shared across sessions. Engines and weights are supplied separately.
 
-The registry's `config` contains package settings (not the host's app config):
+The registry's `config` contains package settings (not the host's app config).
+Only `model.person` is required; omitted settings use the defaults below:
 
 ```yaml
 config:
-  device: 0
   model:
     person: /opt/models/person_sprint_11.engine
-    reid: /opt/models/osnet_reid.engine
-  detector_size: [640, 640]
-  detector_layout: BCN
-  detector_resize: stretch
-  iou_threshold: 0.4
-  max_people: 300
-  reid_batch_size: 32
 ```
 
-Omit `model.reid` for IoU/motion-only tracking. `model.tracking_config` may name a
-BoT-SORT YAML file; a session's `inference.config.tracking_config` overrides it.
-The host ingestion GPU must match `device`.
+| Optional setting | Default | Purpose |
+| --- | --- | --- |
+| `device` | `0` | CUDA GPU index; the host ingestion GPU must match |
+| `model.reid` | unset | ReID engine path; omit for IoU/motion-only tracking |
+| `model.tracking_config` | unset | BoT-SORT YAML path; otherwise use built-in tracker defaults |
+| `detector_size` | `[640, 640]` | Detector input size |
+| `detector_layout` | `BCN` | Raw detector output layout |
+| `detector_resize` | `stretch` | Detector resize mode |
+| `iou_threshold` | `0.4` | Detection NMS IoU threshold |
+| `max_people` | `300` | Maximum detections per frame |
+| `reid_batch_size` | `32` | Maximum ReID crop batch size |
+| `zone_min_overlap` | `0.3` | Default session zone overlap threshold |
+
+A session's `inference.config.tracking_config` overrides `model.tracking_config`.
 
 ## GPU data path
 

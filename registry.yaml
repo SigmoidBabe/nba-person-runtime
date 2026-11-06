@@ -4,18 +4,25 @@
   package:
     entry_point: cv.people
   config:
-    device: 0
+    # Only model.person is required; all other settings use runtime defaults.
     model:
       person: /opt/models/person_sprint_11.engine
+      # Optional: omit for IoU/motion-only tracking.
       reid: /opt/models/osnet_reid.engine
-    detector_size: [640, 640]
-    detector_layout: BCN
-    detector_resize: stretch
-    iou_threshold: 0.4
-    max_people: 300
-    reid_batch_size: 32
+      # Optional BoT-SORT YAML path; omitted by default (built-in tracker settings).
+      # tracking_config: /opt/models/botsort.yaml
+    # Optional settings below show their default values. Uncomment to override.
+    # device: 0                    # CUDA GPU index; must match host ingestion.
+    # detector_size: [640, 640]     # Detector input size.
+    # detector_layout: BCN         # Raw output layout: BCN or BNC.
+    # detector_resize: stretch     # Resize mode: stretch or letterbox.
+    # iou_threshold: 0.4           # Detection NMS IoU threshold.
+    # max_people: 300              # Maximum detections per frame.
+    # reid_batch_size: 32          # Maximum ReID crop batch size.
+    # zone_min_overlap: 0.3        # Default session zone overlap threshold.
   capabilities:
     - id: person.detection
       output_modes: [periodic, event]
     - id: person.tracking
       output_modes: [periodic, event]
+
