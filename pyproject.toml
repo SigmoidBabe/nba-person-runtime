@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "cupy-cuda12x>=13,<14", "tensorrt>=8.6,<11",
-  "numpy>=1.24", "scipy>=1.10", "shapely>=2", "PyYAML>=6"
+  "numpy>=1.24, <=1.26.4", "scipy>=1.10, <=1.11.4", "shapely>=2, <=2.2.0", "PyYAML>=6"
 ]
 
 [project.entry-points."cv_demo.runtimes"]
