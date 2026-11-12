@@ -44,6 +44,70 @@ config:
 
 A session's `inference.config.tracking_config` overrides `model.tracking_config`.
 
+## TOPS calculation API
+
+Set `config.model.person_detection.operations_per_inference` and, for tracking,
+`config.model.person_reidentification.operations_per_inference` in `registry.yaml`
+to each model's operation count for one input item. These values are raw operation
+counts, not GOPs or TOPs. Missing or `null` counts for a required model cause an
+error. Detection requests do not require or validate ReID operation counts.
+
+The API follows the example package's host-managed gRPC pattern. It is exported
+under `cv_demo.grpc_apis` as `person.performance` and enabled by `grpc_apis` in
+`registry.yaml`. Reinstall the package after this entry point change and restart
+the host to load it. Calculation requires no GPU or loaded engines.
+
+Call `cv_demo.api.v1.PackageAPI/Invoke` with:
+
+```json
+{
+  "api": "person.performance",
+  "method": "calculate_tops",
+  "payload": {"cv_capability": "person.tracking", "fps": 30, "batch_size": 4}
+}
+```
+
+`cv_capability` is required: use `person.detection` or `person.tracking`.
+The strings `person detection` and `person tracking` are also accepted and
+normalized to the dotted capability IDs in the response.
+
+`fps` must be a finite positive number and `batch_size` a positive integer
+no greater than `2**53 - 1`, the safe integer limit for protobuf Struct numbers.
+For this estimate, `fps` means batches per second: every batch contains
+`batch_size` frames. Detection uses one detector inference per frame. Tracking
+combines one detector inference and 20 ReID inferences per frame, assuming
+20 people in every frame:
+
+```text
+detection TOPS = detector_operations * fps * batch_size / 1e12
+tracking TOPS = (detector_operations + 20 * reid_operations) * fps * batch_size / 1e12
+```
+
+The result estimates required arithmetic throughput, not measured hardware
+performance. Actual ReID work depends on the number of person crops.
+
+For example, with detection set to `1000000000` operations and ReID to
+`500000000` operations, the tracking response is:
+
+```json
+{
+  "cv_capability": "person.tracking",
+  "fps": 30,
+  "batch_size": 4,
+  "people_per_frame": 20,
+  "models": {
+    "person_detection": {"operations_per_inference": 1000000000, "tops": 0.12},
+    "person_reidentification": {"operations_per_inference": 500000000, "tops": 1.2}
+  },
+  "total_tops": 1.32
+}
+```
+
+Invalid parameters or operation counts raise `ValueError` for the host to map
+to a gRPC error. Unknown methods raise `NotImplementedError`. Python callers can
+also use `cv_people.tops.calculate_tops(config, fps, batch_size, cv_capability)`
+directly.
+
 ## GPU data path
 
 Runtime input must expose `__cuda_array_interface__` as a non-empty HWC uint8

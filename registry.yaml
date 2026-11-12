@@ -3,12 +3,18 @@
 - runtime_id: cv.people
   package:
     entry_point: cv.people
+  grpc_apis:
+    - person.performance
   config:
     # Only model.person is required; all other settings use runtime defaults.
     model:
-      person: /opt/models/person_sprint_11.engine
+      person_detection:
+        engine: /opt/models/person_sprint_11.engine
+        operations_per_inference: null
       # Optional: omit for IoU/motion-only tracking.
-      reid: /opt/models/osnet_reid.engine
+      person_reidentification:
+        engine: /opt/models/person_reid_sprint_11.engine
+        operations_per_inference: null
       # Optional BoT-SORT YAML path; omitted by default (built-in tracker settings).
       # tracking_config: /opt/models/botsort.yaml
     # Optional settings below show their default values. Uncomment to override.
