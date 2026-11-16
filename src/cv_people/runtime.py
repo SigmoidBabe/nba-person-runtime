@@ -44,7 +44,7 @@ class PeopleRuntime:
         defaults = {
             "fps": 5, "confidence_threshold": 0.4,
             "zone_min_overlap": self.config.get("zone_min_overlap", 0.3),
-            "count_stabilization_time": 0, "missing_track_ttl_seconds": 10,
+            "missing_track_ttl_seconds": 10,
             "direction_threshold_pixels": 3, "line_crossing_tolerance_pixels": 1,
             "source_gap_seconds": 10,
         }
@@ -129,10 +129,16 @@ class PeopleRuntime:
                             "zones": [{"zone_id": analytics.zone_meta[name].get("camera_zone_id",
                                        analytics.zone_meta[name].get("zone_id")), "people_count": count}
                                       for name, count in counts.items()]}
-                if spec["output"]["mode"] == "event" and analytics.should_publish_count_event(
+                if analytics.should_publish_count_event(
                     {"event_payload": snapshot}, now=now
                 ):
-                    event_data.append(snapshot)
+                    confirmed_counts = dict(analytics.confirmed_zone_counts)
+                    event_data.append({
+                        **snapshot,
+                        "zone_counts": confirmed_counts,
+                        "zones": [{**zone, "people_count": confirmed_counts[name]}
+                                  for name, zone in zip(counts, snapshot["zones"])],
+                    })
             else:
                 tracker = trackers_by_id[sid]
                 boxes, embeddings = backend.filter_tracker_roi(tracker, detections.copy(), list(features))
@@ -145,7 +151,7 @@ class PeopleRuntime:
                             "zone_counts": counts, "zones": zones}
                 if spec["output"]["mode"] == "event":
                     event_data.extend(crossings)
-            if spec["output"]["mode"] == "periodic" and (
+            if spec["capability"] == "person.tracking" and spec["output"]["mode"] == "periodic" and (
                 state["last_output"] is None or now - state["last_output"] >= spec["output"]["interval"]
             ):
                 event_data.append(snapshot)

@@ -167,11 +167,18 @@ The legacy HTTP upload API is no longer exported; starting a gRPC session does
 not require a `person.detection` package API entry point or `api: true` flag.
 
 Detection snapshots contain `people_count`, `people`, `zone_counts`, and `zones`.
-Event mode emits initial counts and stabilized count changes. Tracking retains
+Detection emits events only after a polygon-zone count change persists for that
+zone's `config.min_count_change_time` seconds (default: 3). The first frame
+establishes a baseline without emitting an event. Zone timers run independently;
+total-count changes outside zones do not trigger events. Detection follows this
+rule for both output modes. Tracking retains
 BoT-SORT IDs, direction, speed, occupancy and dwell-time analytics, with
 `person_zone.enter`, `person_zone.exit`, and `person_line.cross` events.
-Periodic mode emits immediately, then at `output.interval` seconds (zero means
-every processed frame).
+Tracking periodic mode emits immediately, then at `output.interval` seconds
+(zero means every processed frame).
+
+Payload examples using the shared gRPC envelope are documented per capability:
+[person detection](person_detection.md) and [person tracking](person_tracking.md).
 
 Session options go directly under `inference.config`:
 
@@ -179,7 +186,6 @@ Session options go directly under `inference.config`:
 | --- | --- | --- |
 | `fps` | 5 | Host frame scheduling and tracker timing |
 | `confidence_threshold` | 0.4 | Detection session confidence filter |
-| `count_stabilization_time` | 0 | Seconds a changed count must persist |
 | `zone_min_overlap` | 0.3 | Fraction of a box inside a polygon |
 | `tracking_config` | unset | Session override for tracker YAML |
 | `missing_track_ttl_seconds` | 10 | Retention for missing tracks |
@@ -189,6 +195,9 @@ Session options go directly under `inference.config`:
 
 Zones accept `type`/`points` or `zone_type`/`polygon`; normalized coordinates
 scale to frame dimensions. Detection uses xyxy boxes; tracking uses xywh boxes.
+For detection, set `zones[].config.min_count_change_time` to a finite nonnegative
+number of seconds; it defaults to 3, and zero confirms changes immediately.
+This replaces the session-level `count_stabilization_time` option.
 Non-increasing timestamps/sequences, resolution changes and source gaps reset
 session analytics and tracking. `StopRuntime` closes the session; disconnecting
 the event stream only unsubscribes, following the host's runtime contract.

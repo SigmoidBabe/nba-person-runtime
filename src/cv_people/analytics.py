@@ -1,4 +1,5 @@
 """Per-session analytics adapted from the existing detection/tracking sessions."""
+import math
 import time
 from uuid import uuid4
 from .zones import ZoneAnalytics
@@ -9,10 +10,17 @@ class DetectionAnalytics(ZoneAnalytics):
     def __init__(self, spec):
         super().__init__(spec)
         self.confidence_threshold = self.resolve_confidence_threshold(spec["config"])
-        self.count_stabilization_time = self.resolve_count_stabilization_time(spec["config"])
-        self.confirmed_count_signature = None
-        self.candidate_count_signature = None
-        self.candidate_count_since = None
+        self.min_count_change_times = {}
+        for name, zone in self.zones.items():
+            config = zone.get("config", {})
+            if not isinstance(config, dict):
+                raise ValueError(f"Zone {name}: config must be an object")
+            delay = config.get("min_count_change_time", 3)
+            if type(delay) not in (int, float) or not math.isfinite(delay) or delay < 0:
+                raise ValueError(f"Zone {name}: min_count_change_time must be a finite nonnegative number")
+            self.min_count_change_times[name] = delay
+        self.confirmed_zone_counts = None
+        self.candidate_zone_counts = {}
 
     def resolve_confidence_threshold(self, params):
         try:
@@ -42,46 +50,30 @@ class DetectionAnalytics(ZoneAnalytics):
 
         return filtered_people
 
-    def resolve_count_stabilization_time(self, params):
-        try:
-            value = float(params.get("count_stabilization_time", 0.0))
-        except (TypeError, ValueError):
-            return 0.0
-        return max(0.0, value)
-
-    def count_signature(self, payload):
-        event_payload = payload.get("event_payload") or {}
-        zone_counts = event_payload.get("zone_counts") or {}
-        return (int(event_payload.get("people_count", 0)), tuple(sorted(
-            (str(zone_name), int(count or 0))
-            for zone_name, count in zone_counts.items()
-        )))
-
     def should_publish_count_event(self, payload, now=None):
+        """Confirm each zone independently; the first counts establish a baseline."""
         if now is None:
             now = time.monotonic()
 
-        signature = self.count_signature(payload)
-        if self.confirmed_count_signature is None:
-            self.confirmed_count_signature = signature
-            return True
-
-        if signature == self.confirmed_count_signature:
-            self.candidate_count_signature = None
-            self.candidate_count_since = None
+        counts = (payload.get("event_payload") or {}).get("zone_counts") or {}
+        if self.confirmed_zone_counts is None:
+            self.confirmed_zone_counts = dict(counts)
             return False
 
-        if signature != self.candidate_count_signature:
-            self.candidate_count_signature = signature
-            self.candidate_count_since = now
-
-        if now - self.candidate_count_since < self.count_stabilization_time:
-            return False
-
-        self.confirmed_count_signature = signature
-        self.candidate_count_signature = None
-        self.candidate_count_since = None
-        return True
+        changed = False
+        for name, count in counts.items():
+            if count == self.confirmed_zone_counts[name]:
+                self.candidate_zone_counts.pop(name, None)
+                continue
+            candidate, since = self.candidate_zone_counts.get(name, (None, now))
+            if candidate != count:
+                since = now
+                self.candidate_zone_counts[name] = (count, since)
+            if now - since >= self.min_count_change_times[name]:
+                self.confirmed_zone_counts[name] = count
+                self.candidate_zone_counts.pop(name, None)
+                changed = True
+        return changed
 
 
 class TrackingAnalytics(ZoneAnalytics):
