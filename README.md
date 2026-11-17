@@ -21,18 +21,19 @@ only one owner for each person capability. Models are loaded on first session
 creation and shared across sessions. Engines and weights are supplied separately.
 
 The registry's `config` contains package settings (not the host's app config).
-Only `model.person` is required; omitted settings use the defaults below:
+Only `model.person_detection` is required; omitted settings use the defaults below:
 
 ```yaml
 config:
   model:
-    person: /opt/models/person_sprint_11.engine
+    person_detection:
+      engine: /opt/models/person_sprint_11.engine
 ```
 
 | Optional setting | Default | Purpose |
 | --- | --- | --- |
 | `device` | `0` | CUDA GPU index; the host ingestion GPU must match |
-| `model.reid` | unset | ReID engine path; omit for IoU/motion-only tracking |
+| `model.person_reidentification.engine` | unset | ReID engine path; omit for IoU/motion-only tracking |
 | `model.tracking_config` | unset | BoT-SORT YAML path; otherwise use built-in tracker defaults |
 | `detector_size` | `[640, 640]` | Detector input size |
 | `detector_layout` | `BCN` | Raw detector output layout |
@@ -43,6 +44,19 @@ config:
 | `zone_min_overlap` | `0.3` | Default session zone overlap threshold |
 
 A session's `inference.config.tracking_config` overrides `model.tracking_config`.
+
+Model entries load their TensorRT path from `engine`; staged `onnx` and `manifest`
+paths are not inference inputs. Legacy `model.person` and `model.reid` string paths
+remain supported, as do strings under the current model names. Current names take
+precedence when both forms are present.
+
+The core's `ModelService.UpdateModelPath` accepts `.tar.gz` releases containing
+`manifest.json` and a self-contained ONNX model. It stops the managed GPU pipeline,
+builds TensorRT engines, updates registry paths, and creates fresh package instances.
+The package releases TensorRT resources in `close()`. Trackers and counters restart
+after OTA; the core restores enabled sessions from its database. Clients should
+keep runtime streams open through nonterminal `PAUSED` and subsequent startup
+states. Package API instances run separately in the supervised GPU worker.
 
 ## TOPS calculation API
 
@@ -113,6 +127,10 @@ directly.
 Runtime input must expose `__cuda_array_interface__` as a non-empty HWC uint8
 BGR frame on the configured GPU. CPU frames are rejected. Strided CUDA IPC
 frames are wrapped directly, without uploading or copying their pixel storage.
+RTSP input uses `memory: "cuda"`. The read-only image and any slices, tensors, or
+DLPack views are borrowed only until `process_frame` returns. The package retains
+tracker metadata and embeddings, never source frames or crops. The core makes its
+own GPU recording copies before invoking the runtime.
 
 - A fused CUDA kernel resizes, converts BGR to RGB, normalizes and writes NCHW.
   `detector_resize: stretch` preserves the old TensorRT detector's resizing;
@@ -161,10 +179,66 @@ Each frame returns `{session_id: {"snapshot": ..., "events": [{"data": ...}]}}`.
 The host sends snapshots to the separate metadata subscription and wraps each
 event as `type: "inference_event"`, adding session/camera IDs and frame timestamps.
 Events arrive on that session's open `StartRuntime` gRPC stream as
-`event_payload`. The package performs no backend POST, S3 upload, JPEG encoding,
+`event_payload`, after any core image saving and enabled recording finish.
+Metadata snapshots are published immediately through `MetadataService.Subscribe`.
+The package performs no backend POST, S3 upload, JPEG encoding,
 or CPU image annotation. Events contain data only, with no image attachment.
 The legacy HTTP upload API is no longer exported; starting a gRPC session does
 not require a `person.detection` package API entry point or `api: true` flag.
+
+### Core event images and recordings
+
+Media switches are YAML booleans on each capability in the deployment registry,
+alongside `id` and `output_modes`, outside package `config`:
+
+```yaml
+capabilities:
+  - id: person.detection
+    recording: true
+    image_save: true
+    output_modes: [periodic, event]
+  - id: person.tracking
+    recording: false
+    image_save: true
+    output_modes: [periodic, event]
+```
+
+These settings ship in this package's registry. Both switches default to false
+when omitted, operate independently, and require a host restart after editing.
+Sessions and package results cannot override them. Media does not require an
+`api: true` flag; the separate `person.performance` API uses `grpc_apis`.
+
+Each emitted event, including periodic tracking events, triggers enabled media.
+Detection triggers on the frame confirming a count change; tracking triggers on
+the transition or scheduled periodic frame. The package returns on that frame
+without waiting for future frames. Continuous metadata belongs in `snapshot`.
+Because this runtime supplies no event image, the core saves the original trigger
+frame as a JPEG and records original camera frames without annotation.
+
+The core adds media fields to the outer gRPC envelope, outside `event_payload`.
+`image_path` and `video_path` are absolute server paths to completed files; disabled
+outputs have null paths. Image-only events do not wait for video. Recorded events
+retain their trigger event ID and timestamps while recording finishes. Multiple
+events on one camera can share a clip; identify events by `event_id`, not its path.
+Use shared storage for remote file access; there is no video download endpoint.
+No protobuf regeneration is needed for these `google.protobuf.Struct` fields.
+
+Treat events as valid when media fails. Inspect `image_error` or `video_error`
+when a path is null. Available video context is reported by `video_pre_frames`,
+`video_post_frames`, `video_frame_count`, `video_fps`, and
+`video_event_offset_seconds`; nanosecond timestamps remain strings.
+`video_truncation_reason` can indicate a partial clip at source idle, stop,
+shutdown, or discontinuity. Delivery is best effort; disconnected or terminated
+streams may miss pending events.
+
+Configure `event_images.directory`, `event_jpeg_quality`, and `event_recording`
+storage/resource limits in the host application configuration. The default video
+window is five ingestion frames before and five after the trigger frame, before
+inference FPS filtering. `event_recording.enabled` is the global video off switch;
+a recording-enabled capability then receives `video_error: "recording_disabled"`.
+Recording requires working CuPy/CUDA and an OpenCV build with the `mp4v` encoder.
+Provision VRAM and disk for camera count and resolution; there is no automatic
+disk retention policy.
 
 Detection snapshots contain `people_count`, `people`, `zone_counts`, and `zones`.
 Detection emits events only after a polygon-zone count change persists for that

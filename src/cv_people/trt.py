@@ -46,6 +46,15 @@ class TensorRTEngine:
         if self.max_batch <= 0:
             raise ValueError("Engine must have a bounded batch dimension")
 
+    def close(self):
+        """Release TensorRT objects in dependency order on the model device."""
+        with cp.cuda.Device(self.device):
+            cp.cuda.get_current_stream().synchronize()
+            self.context = None
+            self.engine = None
+            self.runtime = None
+            self.logger = None
+
     def infer_batch(self, batch):
         """Chunk or pad to engine batch bounds; return CUDA tensors in input order."""
         if (not isinstance(batch, cp.ndarray) or batch.device.id != self.device

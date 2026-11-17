@@ -31,4 +31,6 @@ class PersonReID:
         return cp.concatenate(parts) if parts else cp.empty((0, 0), dtype=cp.float32)
 
     def close(self):
+        if self.engine is not None:
+            self.engine.close()
         self.engine = None

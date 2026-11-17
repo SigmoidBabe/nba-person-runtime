@@ -9,6 +9,13 @@ The examples use the shared gRPC envelope below. Only the shape of
 and vary for actual messages. `frame_timestamp_ns` is shown as a string to
 preserve nanosecond precision.
 
+The core adds `image_path` and `video_path` to this outer envelope according to
+capability registry switches. Images use the trigger frame; enabled recording
+delays event publication until the clip finishes, while metadata remains immediate.
+Paths may be null; media failures do not invalidate events. See
+[core event images and recordings](README.md#core-event-images-and-recordings)
+for configuration, timing, and failure fields.
+
 ## Count snapshot
 
 | Output mode | When this payload is emitted |

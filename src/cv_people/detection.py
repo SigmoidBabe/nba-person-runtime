@@ -68,4 +68,6 @@ class PersonDetector:
                                cp.full((len(keep), 1), self.person_class_id, dtype=cp.float32)), axis=1)
 
     def close(self):
+        if self.engine is not None:
+            self.engine.close()
         self.engine = None

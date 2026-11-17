@@ -6,7 +6,7 @@
   grpc_apis:
     - person.performance
   config:
-    # Only model.person is required; all other settings use runtime defaults.
+    # Only model.person_detection is required; other settings use runtime defaults.
     model:
       person_detection:
         engine: /opt/models/person_sprint_11.engine
@@ -28,7 +28,11 @@
     # zone_min_overlap: 0.3        # Default session zone overlap threshold.
   capabilities:
     - id: person.detection
+      recording: true
+      image_save: true
       output_modes: [periodic, event]
     - id: person.tracking
+      recording: false
+      image_save: true
       output_modes: [periodic, event]
 

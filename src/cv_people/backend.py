@@ -30,18 +30,34 @@ class PeopleBackend:
         self.person_detector = self.person_reid = None
         self.trackers_by_service_key = {}
         self.tracker_data_by_service_key = {}
+        self.person_model_path = self._engine_path(config, "person_detection", "person", required=True)
+        reid_path = self._engine_path(config, "person_reidentification", "reid") if enable_reid else None
         with self._model_access():
             self.person_detector = PersonDetector(
-                config["model"]["person"], self.device,
+                self.person_model_path, self.device,
                 size=config.get("detector_size", (640, 640)),
                 layout=config.get("detector_layout", "BCN"),
                 iou_threshold=config.get("iou_threshold", 0.4),
                 max_people=config.get("max_people", 300),
                 resize=config.get("detector_resize", "stretch"),
             )
-            reid_path = config["model"].get("reid")
             if enable_reid and reid_path:
                 self.person_reid = PersonReID(reid_path, self.device, config.get("reid_batch_size", 32))
+
+    @staticmethod
+    def _engine_path(config, name, legacy_name, *, required=False):
+        models = config.get("model")
+        if not isinstance(models, dict):
+            raise ValueError("config.model must be an object")
+        # Prefer the current registry key, including after an OTA update. Never
+        # fall back to an old engine when a current entry lacks its built engine.
+        setting = models[name] if name in models else models.get(legacy_name)
+        if setting is None and not required:
+            return None
+        path = setting.get("engine") if isinstance(setting, dict) else setting
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"config.model.{name} must specify a non-empty TensorRT engine path")
+        return path
 
     @contextmanager
     def _model_access(self):
@@ -113,7 +129,7 @@ class PeopleBackend:
         reid_encoder = _PrecomputedFeatureEncoder() if tracker_config.with_reid else None
         tracker = YOLOv8BoTSORT(
             reid_model_path=None,
-            detector_model=self.config.get("model", {}).get("person", "person.engine"),
+            detector_model=self.person_model_path,
             config=tracker_config,
             detector=self.person_detector,
             reid=reid_encoder,
