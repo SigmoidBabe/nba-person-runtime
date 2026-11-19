@@ -28,6 +28,7 @@ config:
   model:
     person_detection:
       engine: /opt/models/person_sprint_11.engine
+      manifest: /opt/models/manifest.json
 ```
 
 | Optional setting | Default | Purpose |
@@ -45,8 +46,11 @@ config:
 
 A session's `inference.config.tracking_config` overrides `model.tracking_config`.
 
-Model entries load their TensorRT path from `engine`; staged `onnx` and `manifest`
-paths are not inference inputs. Legacy `model.person` and `model.reid` string paths
+Model entries load their TensorRT path from `engine`. Detector labels come from
+`model.person_detection.classes`, copied by the core from the OTA manifest. When
+`classes` is absent or null, the detector reads `classes` from the configured
+`manifest` JSON file, defaulting to `manifest.json` beside the engine. Staged
+`onnx` paths are not inference inputs. Legacy `model.person` and `model.reid` string paths
 remain supported, as do strings under the current model names. Current names take
 precedence when both forms are present.
 
@@ -153,8 +157,12 @@ serialized and select the configured device on every thread. CUDA work is
 synchronized even on failures before borrowed frame storage can be recycled.
 
 Detector engines must expose one linear FP16/FP32 NCHW input and one raw YOLOv8
-output `[B,4+C,N]` (`BCN`) or `[B,N,4+C]` (`BNC`). Supply a same-stem `.txt` file
-with one unique non-empty label per line, including `person`. This runtime uses
+output `[B,4+C,N]` (`BCN`) or `[B,N,4+C]` (`BNC`). The manifest's `classes` must
+be a non-empty array of unique non-empty strings, including `person`, in model
+output order (array index is class ID). For a person-only detector, use
+`"classes": ["person"]`. Empty class lists are invalid for detection even though
+the core permits them for other model types. `.txt` label files are no longer
+used. This runtime uses
 detection outputs; segmentation and end-to-end NMS engines are unsupported.
 OSNet engines must include the backbone and BN neck, accept `[B,3,256,128]`, and
 return `[B,embedding_dim]`. Profile zero controls dynamic batches; fixed batches

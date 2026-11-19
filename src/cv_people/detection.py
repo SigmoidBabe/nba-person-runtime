@@ -1,4 +1,5 @@
 """Package-owned raw YOLOv8 TensorRT detection; all numerical work is CUDA."""
+import json
 from pathlib import Path
 
 import cupy as cp
@@ -9,7 +10,8 @@ from .trt import TensorRTEngine
 
 class PersonDetector:
     def __init__(self, path, device=0, *, size=(640, 640), layout="BCN",
-                 iou_threshold=0.4, max_people=300, resize="stretch"):
+                 iou_threshold=0.4, max_people=300, resize="stretch",
+                 classes=None, manifest=None):
         self.device = device
         self.size = tuple(size)
         if len(self.size) != 2 or any(type(v) is not int or v <= 0 for v in self.size):
@@ -22,13 +24,17 @@ class PersonDetector:
         self.limit = int(max_people)
         if layout not in ("BCN", "BNC") or not 0 <= self.iou <= 1 or self.limit <= 0:
             raise ValueError("Invalid detector_layout, iou_threshold or max_people")
-        labels_path = Path(path).with_suffix(".txt")
-        self.classes = [line.strip() for line in labels_path.read_text(encoding="utf-8").splitlines()]
-        while self.classes and not self.classes[-1]:
-            self.classes.pop()
-        if (not self.classes or any(not name for name in self.classes)
-                or len(set(self.classes)) != len(self.classes) or "person" not in self.classes):
-            raise ValueError(f"{labels_path} must contain unique non-empty labels including person")
+        if classes is None:
+            manifest_path = Path(manifest) if manifest is not None else Path(path).parent / "manifest.json"
+            metadata = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(metadata, dict):
+                raise ValueError(f"{manifest_path} must contain a JSON object")
+            classes = metadata.get("classes")
+        if (not isinstance(classes, list) or not classes
+                or any(not isinstance(name, str) or not name.strip() for name in classes)
+                or len(set(classes)) != len(classes) or "person" not in classes):
+            raise ValueError("Detection model classes must be an array of unique non-empty strings including person")
+        self.classes = list(classes)
         self.person_class_id = self.classes.index("person")
         self.engine = TensorRTEngine(path, device)
 
@@ -45,7 +51,7 @@ class PersonDetector:
         if self.layout == "BCN":
             prediction = prediction.T
         if prediction.ndim != 2 or prediction.shape[1] != 4 + len(self.classes):
-            raise ValueError("Expected raw YOLOv8 boxes and class scores matching the label file")
+            raise ValueError("Expected raw YOLOv8 boxes and class scores matching the model classes")
         prediction = prediction.astype(cp.float32, copy=False)
         prediction = prediction[cp.isfinite(prediction).all(1)]
         class_scores = prediction[:, 4:]

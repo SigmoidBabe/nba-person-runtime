@@ -1,0 +1,10 @@
+{
+    "model_type": "detection",
+    "classes" : [],
+    "operations_per_inference": null,
+    "instance_count_per_frame": null,
+    "minShapes": "images:1x3x256x128",
+    "optShapes": "images:32x3x256x128",
+    "maxShapes": "images:64x3x256x128",
+    "quantization": "fp16"
+}

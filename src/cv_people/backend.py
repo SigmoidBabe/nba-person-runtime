@@ -31,6 +31,9 @@ class PeopleBackend:
         self.trackers_by_service_key = {}
         self.tracker_data_by_service_key = {}
         self.person_model_path = self._engine_path(config, "person_detection", "person", required=True)
+        models = config["model"]
+        detector_settings = models["person_detection"] if "person_detection" in models else models.get("person")
+        detector_settings = detector_settings if isinstance(detector_settings, dict) else {}
         reid_path = self._engine_path(config, "person_reidentification", "reid") if enable_reid else None
         with self._model_access():
             self.person_detector = PersonDetector(
@@ -40,6 +43,8 @@ class PeopleBackend:
                 iou_threshold=config.get("iou_threshold", 0.4),
                 max_people=config.get("max_people", 300),
                 resize=config.get("detector_resize", "stretch"),
+                classes=detector_settings.get("classes"),
+                manifest=detector_settings.get("manifest"),
             )
             if enable_reid and reid_path:
                 self.person_reid = PersonReID(reid_path, self.device, config.get("reid_batch_size", 32))

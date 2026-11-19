@@ -10,6 +10,7 @@
     model:
       person_detection:
         engine: /opt/models/person_sprint_11.engine
+        manifest: /opt/models/manifest.json
         operations_per_inference: null
       # Optional: omit for IoU/motion-only tracking.
       person_reidentification:

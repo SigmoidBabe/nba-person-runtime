@@ -11,6 +11,13 @@ must use YOLOv8 class scores without a separate objectness channel; the best
 class per anchor is chosen before filtering for the model's `person` class.
 Non-finite predictions and zero-area boxes are removed on CUDA.
 
+Class names come from the detector model's registry `classes` array, populated
+from `manifest.json` by the core during OTA. If absent or null, the detector
+reads the configured `manifest` path, or `manifest.json` beside the engine for
+path-only entries. Labels must be unique non-empty strings including `person`,
+in the engine's output class order. No `.txt` label file is required or read.
+Fresh package instances load the new class mapping after an OTA restart.
+
 The default stretch resize preserves the previous TensorRT detector's behavior;
 `detector_resize: letterbox` enables aspect-preserving resize/padding. Layout,
 score filtering, NMS and coordinate restoration run on GPU. No source image or
